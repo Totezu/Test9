@@ -1,32 +1,66 @@
 #include "Control.h"
 
+// Helper: Update PID window and compute output for a single channel during heating phase
+static void updateChannelHeating(
+    unsigned long now,
+    unsigned long& windowStartTime,
+    double& Setpoint,
+    int allowedTemp,
+    int targetTemp,
+    float currentTemp,
+    double& Input,
+    PID& pid,
+    double& Output,
+    double& pidOutput
+) {
+  if (now - windowStartTime >= windowSize) {
+    unsigned long windowsBehind = (now - windowStartTime) / windowSize;
+    windowStartTime += windowsBehind * windowSize;
+    Setpoint = (double)allowedTemp + PID_SETPOINT_OFFSET;
+    if (Setpoint > targetTemp) Setpoint = targetTemp;
+    Input = currentTemp;
+    pid.SetOutputLimits(0, windowSize);
+    pid.Compute();
+    pidOutput = Output;
+  }
+}
+
+// Helper: Update PID window and compute output for a single channel during hold phase
+static void updateChannelHold(
+    unsigned long now,
+    unsigned long& windowStartTime,
+    double& Setpoint,
+    int targetTemp,
+    float currentTemp,
+    double& Input,
+    PID& pid,
+    double& Output,
+    double& pidOutput
+) {
+  if (now - windowStartTime >= windowSize) {
+    unsigned long windowsBehind = (now - windowStartTime) / windowSize;
+    windowStartTime += windowsBehind * windowSize;
+    Setpoint = (double)targetTemp;
+    Input = currentTemp;
+    pid.SetOutputLimits(0, windowSize);
+    pid.Compute();
+    pidOutput = Output;
+  }
+}
+
 void controlSSRHeating() {
   unsigned long now = millis();
 
-  if (now - windowStartTime1 >= windowSize) {
-    unsigned long windowsBehind = (now - windowStartTime1) / windowSize;
-    windowStartTime1 += windowsBehind * windowSize;
-    Setpoint1 = (double)allowedT1 + PID_SETPOINT_OFFSET;
-    if (Setpoint1 > targetTemp1) Setpoint1 = targetTemp1;
-    Input1 = currentTemp1;
-    pid1.SetOutputLimits(0, windowSize);
-    pid1.Compute();
-    pidOutput1 = Output1;
-  }
+  // Channel 1
+  updateChannelHeating(now, windowStartTime1, Setpoint1, allowedT1, targetTemp1,
+                       currentTemp1, Input1, pid1, Output1, pidOutput1);
   bool s1 = ((now - windowStartTime1) < pidOutput1) && (allowedT1 < targetTemp1);
   digitalWrite(HEATER1_PIN, s1 ? HIGH : LOW);
   heater1State = s1;
 
-  if (now - windowStartTime2 >= windowSize) {
-    unsigned long windowsBehind = (now - windowStartTime2) / windowSize;
-    windowStartTime2 += windowsBehind * windowSize;
-    Setpoint2 = (double)allowedT2 + PID_SETPOINT_OFFSET;
-    if (Setpoint2 > targetTemp2) Setpoint2 = targetTemp2;
-    Input2 = currentTemp2;
-    pid2.SetOutputLimits(0, windowSize);
-    pid2.Compute();
-    pidOutput2 = Output2;
-  }
+  // Channel 2
+  updateChannelHeating(now, windowStartTime2, Setpoint2, allowedT2, targetTemp2,
+                       currentTemp2, Input2, pid2, Output2, pidOutput2);
   bool s2 = ((now - windowStartTime2) < pidOutput2) && (allowedT2 < targetTemp2);
   digitalWrite(HEATER2_PIN, s2 ? HIGH : LOW);
   heater2State = s2;
@@ -35,28 +69,16 @@ void controlSSRHeating() {
 void controlSSRHold() {
   unsigned long now = millis();
 
-  if (now - windowStartTime1 >= windowSize) {
-    unsigned long windowsBehind = (now - windowStartTime1) / windowSize;
-    windowStartTime1 += windowsBehind * windowSize;
-    Setpoint1 = (double)targetTemp1;
-    Input1 = currentTemp1;
-    pid1.SetOutputLimits(0, windowSize);
-    pid1.Compute();
-    pidOutput1 = Output1;
-  }
+  // Channel 1
+  updateChannelHold(now, windowStartTime1, Setpoint1, targetTemp1,
+                    currentTemp1, Input1, pid1, Output1, pidOutput1);
   bool s1 = ((now - windowStartTime1) < pidOutput1);
   digitalWrite(HEATER1_PIN, s1 ? HIGH : LOW);
   heater1State = s1;
 
-  if (now - windowStartTime2 >= windowSize) {
-    unsigned long windowsBehind = (now - windowStartTime2) / windowSize;
-    windowStartTime2 += windowsBehind * windowSize;
-    Setpoint2 = (double)targetTemp2;
-    Input2 = currentTemp2;
-    pid2.SetOutputLimits(0, windowSize);
-    pid2.Compute();
-    pidOutput2 = Output2;
-  }
+  // Channel 2
+  updateChannelHold(now, windowStartTime2, Setpoint2, targetTemp2,
+                    currentTemp2, Input2, pid2, Output2, pidOutput2);
   bool s2 = ((now - windowStartTime2) < pidOutput2);
   digitalWrite(HEATER2_PIN, s2 ? HIGH : LOW);
   heater2State = s2;

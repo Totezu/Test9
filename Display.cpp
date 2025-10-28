@@ -1,5 +1,6 @@
 #include "Display.h"
-#include <Ethernet.h>  // for Ethernet.localIP()
+#include "Utils.h"       // for formatRemain
+#include <Ethernet.h>    // for Ethernet.localIP()
 
 #if USE_DISPLAY
 // Helper: print current IP aligned to the right on the status line
@@ -30,35 +31,32 @@ static void drawRightAlignedConnType() {
   display.print(label);
 }
 
+// Helper: draw a temperature line with all status indicators
+static void drawTempLine(int y, const char* label, float current, int allowed, int target,
+                         bool heaterOn, bool autotuneOn, bool alignOn) {
+  display.setCursor(0, y);
+  display.print(label);
+  display.print(F(" "));
+  if (isnan(current)) display.print(F("--"));
+  else display.print((int)(current + 0.5));
+  display.print(F("/"));
+  if (allowed < 0) display.print(F("---")); else display.print(allowed);
+  display.print(F("/"));
+  display.print(target);
+  if (heaterOn)    display.print(F(" H"));
+  if (autotuneOn)  display.print(F(" A"));
+  if (alignOn)     display.print(F(" ="));
+}
+
 // Рисуем содержимое одной «страницы» буфера
 static void drawScreenContent(int allowedT1_, int allowedT2_) {
   display.setFont(u8g2_font_6x12_tr);
 
   // T1
-  display.setCursor(0, 10);
-  display.print(F("T1 "));
-  if (isnan(currentTemp1)) display.print(F("--"));
-  else display.print((int)(currentTemp1 + 0.5));
-  display.print(F("/"));
-  if (allowedT1_ < 0) display.print(F("---")); else display.print(allowedT1_);
-  display.print(F("/"));
-  display.print(targetTemp1);
-  if (heater1State)    display.print(F(" H"));
-  if (autotune1Active) display.print(F(" A"));
-  if (alignPhase)      display.print(F(" ="));
+  drawTempLine(10, "T1", currentTemp1, allowedT1_, targetTemp1, heater1State, autotune1Active, alignPhase);
 
   // T2
-  display.setCursor(0, 22);
-  display.print(F("T2 "));
-  if (isnan(currentTemp2)) display.print(F("--"));
-  else display.print((int)(currentTemp2 + 0.5));
-  display.print(F("/"));
-  if (allowedT2_ < 0) display.print(F("---")); else display.print(allowedT2_);
-  display.print(F("/"));
-  display.print(targetTemp2);
-  if (heater2State)    display.print(F(" H"));
-  if (autotune2Active) display.print(F(" A"));
-  if (alignPhase)      display.print(F(" ="));
+  drawTempLine(22, "T2", currentTemp2, allowedT2_, targetTemp2, heater2State, autotune2Active, alignPhase);
 
   // HOLD
   display.setCursor(0, 34);
@@ -70,13 +68,9 @@ static void drawScreenContent(int allowedT1_, int allowedT2_) {
   display.setCursor(0, 46);
   display.print(F("LEFT: "));
   if (remainSeconds > 0) {
-    int remMin = remainSeconds / 60;
-    int remSec = remainSeconds % 60;
-    if (remMin < 10) display.print('0');
-    display.print(remMin);
-    display.print(':');
-    if (remSec < 10) display.print('0');
-    display.print(remSec);
+    char timeBuf[16];
+    formatRemain(remainSeconds, timeBuf, sizeof(timeBuf));
+    display.print(timeBuf);
   } else {
     display.print(F("--:--"));
   }
