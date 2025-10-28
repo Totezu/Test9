@@ -2,137 +2,188 @@
 #include "Sensors.h"
 #include "Utils.h"
 
-void startAutotune1() {
+// Helper to start autotune for channel 1/2 (no behavior changes)
+static void startAutotuneCommon(
+  // Text labels
+  const char* initLogTitle,
+  const char* startedMsg,
+  // Channel variables
+  bool& autotuneActive, bool& autotunePendingSave, bool& autotuneError,
+  unsigned long& autotuneStart,
+  double& autotuneInput, double& autotuneOutput,
+  PID_ATune*& tuner,
+  float& autotuneKp, float& autotuneKi, float& autotuneKd,
+  int& savedTargetTemp, int& targetTemp,
+  float currentTemp,
+  unsigned long& windowStartTime,
+  uint8_t /*heaterPin*/
+) {
   readTemperatures();
-  savedTargetTemp1 = targetTemp1;
-  targetTemp1 = (int)(currentTemp1 + 10 + 0.5);
-  autotuneInput1 = currentTemp1;
-  autotuneOutput1 = 0.0;
-  if (tuner1 != nullptr) { delete tuner1; tuner1 = nullptr; }
-  tuner1 = new PID_ATune(&autotuneInput1, &autotuneOutput1);
-  tuner1->SetOutputStep(3500);
-  tuner1->SetLookbackSec(20);
-  tuner1->SetNoiseBand(1);
-  autotune1Active = true;
-  autotune1PendingSave = false;
-  autotune1Error = false;
-  autotune1Start = millis();
-  windowStartTime1 = millis();
+  (void)initLogTitle; (void)autotuneKp; (void)autotuneKi; (void)autotuneKd; // silence unused-parameter warnings
+
+  savedTargetTemp = targetTemp;
+  targetTemp = (int)(currentTemp + 10 + 0.5);
+  autotuneInput = currentTemp;
+  autotuneOutput = 0.0;
+
+  if (tuner != nullptr) { delete tuner; tuner = nullptr; }
+  tuner = new PID_ATune(&autotuneInput, &autotuneOutput);
+  tuner->SetOutputStep(3500);
+  tuner->SetLookbackSec(20);
+  tuner->SetNoiseBand(1);
+
+  autotuneActive = true;
+  autotunePendingSave = false;
+  autotuneError = false;
+  autotuneStart = millis();
+  windowStartTime = millis();
+
 #ifdef DEBUG_VERBOSE
-  Serial.println("=== AUTOTUNE1 INIT LOG (PID_ATune) ===");
-  Serial.print("currentTemp1: "); Serial.println(currentTemp1, 4);
-  Serial.print("targetTemp1: "); Serial.println(targetTemp1);
-  Serial.print("windowSize: "); Serial.println(windowSize);
+  Serial.println(initLogTitle);
+  Serial.print("currentTemp: "); Serial.println(currentTemp, 4);
+  Serial.print("targetTemp: ");  Serial.println(targetTemp);
+  Serial.print("windowSize: ");  Serial.println(windowSize);
 #endif
-  printEvent("Autotune1 started (PID_ATune)");
+  printEvent(startedMsg);
 }
 
-void startAutotune2() {
-  readTemperatures();
-  savedTargetTemp2 = targetTemp2;
-  targetTemp2 = (int)(currentTemp2 + 10 + 0.5);
-  autotuneInput2 = currentTemp2;
-  autotuneOutput2 = 0.0;
-  if (tuner2 != nullptr) { delete tuner2; tuner2 = nullptr; }
-  tuner2 = new PID_ATune(&autotuneInput2, &autotuneOutput2);
-  tuner2->SetOutputStep(3500);
-  tuner2->SetLookbackSec(20);
-  tuner2->SetNoiseBand(1);
-  autotune2Active = true;
-  autotune2PendingSave = false;
-  autotune2Error = false;
-  autotune2Start = millis();
-  windowStartTime2 = millis();
-#ifdef DEBUG_VERBOSE
-  Serial.println("=== AUTOTUNE2 INIT LOG (PID_ATune) ===");
-  Serial.print("currentTemp2: "); Serial.println(currentTemp2, 4);
-  Serial.print("targetTemp2: "); Serial.println(targetTemp2);
-  Serial.print("windowSize: "); Serial.println(windowSize);
-#endif
-  printEvent("Autotune2 started (PID_ATune)");
-}
-
-void updateAutotune() {
-  static bool lastAutotuneHeater1State = false;
-  static bool lastAutotuneHeater2State = false;
-
+// Perform one autotune step for a channel (inside updateAutotune)
+static void updateAutotuneOne(
+  // Text / messages
+  const char* dbgPrefix,
+  const char* awaitingConfirmMsg,
+  const char* timeoutMsg,
+  // Channel flags/state
+  bool& autotuneActive, bool& autotunePendingSave, bool& autotuneError,
+  unsigned long& autotuneStart,
+  double& autotuneInput, double& autotuneOutputRef,
+  PID_ATune*& tuner,
+  float& autotuneKp, float& autotuneKi, float& autotuneKd,
+  // Measurements/window timers
+  float currentTemp,
+  unsigned long& windowStartTime,
+  // External effects
+  uint8_t heaterPin,
+  bool isCh1
+) {
   unsigned long now = millis();
+  readTemperatures();
+  autotuneInput = currentTemp;
 
-  if (autotune1Active && tuner1) {
-    readTemperatures(); autotuneInput1 = currentTemp1;
+  if (now - windowStartTime >= windowSize) {
+    unsigned long windowsBehind = (now - windowStartTime) / windowSize;
+    windowStartTime += windowsBehind * windowSize;
 
-    if (now - windowStartTime1 >= windowSize) {
-      unsigned long windowsBehind = (now - windowStartTime1) / windowSize;
-      windowStartTime1 += windowsBehind * windowSize;
-      readTemperatures(); autotuneInput1 = currentTemp1;
+    readTemperatures();
+    autotuneInput = currentTemp;
 
-      int tuneResult = tuner1->Runtime();
+    int tuneResult = tuner->Runtime();
 
-      if (tuneResult == 1) {
-        autotuneKp1 = tuner1->GetKp(); autotuneKi1 = tuner1->GetKi(); autotuneKd1 = tuner1->GetKd();
-        autotune1PendingSave = true; autotune1Active = false; autotune1Error = false;
-        printEvent("T1 autotune awaiting confirmation (PID_ATune)");
-        digitalWrite(HEATER1_PIN, LOW); lastAutotuneHeater1State = false;
-        delete tuner1; tuner1 = nullptr;
-      }
-      if (now - autotune1Start > AUTOTUNE_TIMEOUT) {
-        autotune1Active = false; autotune1Error = true;
-        printEvent("T1 autotune TIMEOUT");
-        digitalWrite(HEATER1_PIN, LOW); lastAutotuneHeater1State = false;
-        delete tuner1; tuner1 = nullptr;
-      }
+    if (tuneResult == 1) {
+      autotuneKp = tuner->GetKp();
+      autotuneKi = tuner->GetKi();
+      autotuneKd = tuner->GetKd();
+      autotunePendingSave = true;
+      autotuneActive = false;
+      autotuneError = false;
+      printEvent(awaitingConfirmMsg);
+      digitalWrite(heaterPin, LOW);
+      delete tuner; tuner = nullptr;
     }
-
-    bool autotuneHeater1State = ((now - windowStartTime1) < autotuneOutput1);
-    digitalWrite(HEATER1_PIN, autotuneHeater1State ? HIGH : LOW);
-
-    if (autotuneHeater1State != lastAutotuneHeater1State) {
-      readTemperatures(); autotuneInput1 = currentTemp1;
-#ifdef DEBUG_VERBOSE
-      Serial.print("[AUTOTUNE1] Heater "); Serial.print(autotuneHeater1State ? "ON " : "OFF ");
-      Serial.print(" Temp: "); Serial.print(autotuneInput1, 2);
-      Serial.print(" Output: "); Serial.println(autotuneOutput1, 2);
-#endif
-      lastAutotuneHeater1State = autotuneHeater1State;
+    if (now - autotuneStart > AUTOTUNE_TIMEOUT) {
+      autotuneActive = false;
+      autotuneError = true;
+      printEvent(timeoutMsg);
+      digitalWrite(heaterPin, LOW);
+      delete tuner; tuner = nullptr;
     }
   }
 
-  if (autotune2Active && tuner2) {
-    readTemperatures(); autotuneInput2 = currentTemp2;
+  // SSR window PWM for autotune
+  bool heaterState = ((now - windowStartTime) < (unsigned long)autotuneOutputRef);
+  digitalWrite(heaterPin, heaterState ? HIGH : LOW);
 
-    if (now - windowStartTime2 >= windowSize) {
-      unsigned long windowsBehind = (now - windowStartTime2) / windowSize;
-      windowStartTime2 += windowsBehind * windowSize;
-      readTemperatures(); autotuneInput2 = currentTemp2;
+  static bool lastAutotuneHeater1State = false;
+  static bool lastAutotuneHeater2State = false;
+  bool& lastStateRef = isCh1 ? lastAutotuneHeater1State : lastAutotuneHeater2State;
 
-      int tuneResult = tuner2->Runtime();
-
-      if (tuneResult == 1) {
-        autotuneKp2 = tuner2->GetKp(); autotuneKi2 = tuner2->GetKi(); autotuneKd2 = tuner2->GetKd();
-        autotune2PendingSave = true; autotune2Active = false; autotune2Error = false;
-        printEvent("T2 autotune awaiting confirmation (PID_ATune)");
-        digitalWrite(HEATER2_PIN, LOW); lastAutotuneHeater2State = false;
-        delete tuner2; tuner2 = nullptr;
-      }
-      if (now - autotune2Start > AUTOTUNE_TIMEOUT) {
-        autotune2Active = false; autotune2Error = true;
-        printEvent("T2 autotune TIMEOUT");
-        digitalWrite(HEATER2_PIN, LOW); lastAutotuneHeater2State = false;
-        delete tuner2; tuner2 = nullptr;
-      }
-    }
-
-    bool autotuneHeater2State = ((now - windowStartTime2) < autotuneOutput2);
-    digitalWrite(HEATER2_PIN, autotuneHeater2State ? HIGH : LOW);
-
-    if (autotuneHeater2State != lastAutotuneHeater2State) {
-      readTemperatures(); autotuneInput2 = currentTemp2;
+  if (heaterState != lastStateRef) {
+    readTemperatures();
+    autotuneInput = currentTemp;
 #ifdef DEBUG_VERBOSE
-      Serial.print("[AUTOTUNE2] Heater "); Serial.print(autotuneHeater2State ? "ON " : "OFF ");
-      Serial.print(" Temp: "); Serial.print(autotuneInput2, 2);
-      Serial.print(" Output: "); Serial.println(autotuneOutput2, 2);
+    Serial.print(dbgPrefix); Serial.print(" Heater ");
+    Serial.print(heaterState ? "ON " : "OFF ");
+    Serial.print(" Temp: "); Serial.print(autotuneInput, 2);
+    Serial.print(" Output: "); Serial.println(autotuneOutputRef, 2);
 #endif
-      lastAutotuneHeater2State = autotuneHeater2State;
-    }
+    lastStateRef = heaterState;
+  }
+}
+
+void startAutotune1() {
+  startAutotuneCommon(
+    "=== AUTOTUNE1 INIT LOG (PID_ATune) ===",
+    "Autotune1 started (PID_ATune)",
+    autotune1Active, autotune1PendingSave, autotune1Error,
+    autotune1Start,
+    autotuneInput1, autotuneOutput1,
+    tuner1,
+    autotuneKp1, autotuneKi1, autotuneKd1,
+    savedTargetTemp1, targetTemp1,
+    currentTemp1,
+    windowStartTime1,
+    HEATER1_PIN
+  );
+}
+
+void startAutotune2() {
+  startAutotuneCommon(
+    "=== AUTOTUNE2 INIT LOG (PID_ATune) ===",
+    "Autotune2 started (PID_ATune)",
+    autotune2Active, autotune2PendingSave, autotune2Error,
+    autotune2Start,
+    autotuneInput2, autotuneOutput2,
+    tuner2,
+    autotuneKp2, autotuneKi2, autotuneKd2,
+    savedTargetTemp2, targetTemp2,
+    currentTemp2,
+    windowStartTime2,
+    HEATER2_PIN
+  );
+}
+
+void updateAutotune() {
+  if (autotune1Active && tuner1) {
+    updateAutotuneOne(
+      "[AUTOTUNE1]",
+      "T1 autotune awaiting confirmation (PID_ATune)",
+      "T1 autotune TIMEOUT",
+      autotune1Active, autotune1PendingSave, autotune1Error,
+      autotune1Start,
+      autotuneInput1, autotuneOutput1,
+      tuner1,
+      autotuneKp1, autotuneKi1, autotuneKd1,
+      currentTemp1,
+      windowStartTime1,
+      HEATER1_PIN,
+      true
+    );
+  }
+
+  if (autotune2Active && tuner2) {
+    updateAutotuneOne(
+      "[AUTOTUNE2]",
+      "T2 autotune awaiting confirmation (PID_ATune)",
+      "T2 autotune TIMEOUT",
+      autotune2Active, autotune2PendingSave, autotune2Error,
+      autotune2Start,
+      autotuneInput2, autotuneOutput2,
+      tuner2,
+      autotuneKp2, autotuneKi2, autotuneKd2,
+      currentTemp2,
+      windowStartTime2,
+      HEATER2_PIN,
+      false
+    );
   }
 }
